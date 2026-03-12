@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>barco_autonomo_tmr</name>
+  <version>0.0.1</version>
+  <description>Paquete ROS2 para control de barco autónomo</description>
+  <maintainer email="lucasrosasdiego@gmail.com">Cienticeromalote</maintainer>
+  <license>Apache License 2.0</license>
+
+  <!-- Dependencias de compilación y ejecución -->
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+</package>

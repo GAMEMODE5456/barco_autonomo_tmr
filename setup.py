@@ -13,10 +13,10 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='root',
-    maintainer_email='root@todo.todo',
-    description='TODO: Package description',
-    license='TODO: License declaration',
+    maintainer='Cienticeromalote',
+    maintainer_email='lucasrosasdiego@gmail.com',
+    description='Paquete ROS2 para control de un barco autónomo',
+    license='Apache License 2.0',
     extras_require={
         'test': [
             'pytest',
@@ -25,6 +25,10 @@ setup(
     entry_points={
         'console_scripts': [
             'motor_node = barco_control.motor_node:main',
+            'servo_node = barco_control.servo_node:main',
+            'imu_node = barco_control.imu_node:main',
+            'gps_node = barco_control.gps_node:main',
+            'navigation_node = barco_control.navigation_node:main',
         ],
     },
 )
