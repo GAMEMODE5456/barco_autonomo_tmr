@@ -3,3 +3,4 @@ from .servo_node import ServoNode
 from .imu_node import IMUNode
 from .navigation_node import NavigationNode
 from .gps_node import GPSNode
+from .conveyor_node import ConveyorNode

@@ -28,4 +28,9 @@ def generate_launch_description():
             executable='servo_node',
             name='servo_node'
         ),
+        Node(
+            package='barco_autonomo_tmr',
+            executable='conveyor_node',
+            name='conveyor_node'
+        )
     ])
