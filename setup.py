@@ -29,7 +29,9 @@ setup(
             'imu_node = barco_control.imu_node:main',
             'gps_node = barco_control.gps_node:main',
             'navigation_node = barco_control.navigation_node:main',
-            'conveyor_node = barco_control.conveyor_node:main'
+            'conveyor_node = barco_control.conveyor_node:main',
+            'ultra_sonic_node = barco_control.ultra_sonic_node:main',
+            'esp_bridge_node = barco_control.esp_bridge_node:main'
         ],
     },
 )
