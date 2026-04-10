@@ -1,86 +1,165 @@
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float32, Bool
+from std_msgs.msg import Float32, Float32MultiArray, Bool
 import serial
 import threading
 import time
 
 class ESPBridgeNode(Node):
+    """
+    Unico nodo que posee el puerto serial hacia el ESP32.
+    Recibe topics de ROS2 y los traduce a comandos seriales.
+    Recibe datos seriales del ESP32 y los publica como topics.
+
+    Protocolo serial (Raspberry → ESP32):
+      MOT:L:0.50,R:0.50\\n   velocidad motores [-1.0 .. 1.0]
+      SRV:90.0\\n             angulo servo timon [-45 .. 45]
+      CONV:ON\\n / CONV:OFF\\n banda transportadora
+
+    Protocolo serial (ESP32 → Raspberry):
+      DIST:32.5\\n            distancia ultrasonico cm
+      CONV:ON\\n / CONV:OFF\\n confirmacion estado banda
+      HB:OK\\n                heartbeat opcional
+    """
 
     def __init__(self):
         super().__init__('esp_bridge_node')
-        self.dist_pub = self.create_publisher(Float32, 'obstacle_distance', 10)
-        self.conv_pub = self.create_publisher(Bool, 'conveyor_status', 10)
 
-        # Ajusta el puerto según tu sistema
+        # ── Subscripciones desde otros nodos ROS2 ──
+        self.create_subscription(
+            Float32MultiArray, 'motor_speeds',
+            self.cb_motor_speeds, 10)
+
+        self.create_subscription(
+            Float32, 'rudder_angle',
+            self.cb_rudder, 10)
+
+        self.create_subscription(
+            Bool, 'conveyor_power',
+            self.cb_conveyor, 10)
+
+        # ── Publishers hacia otros nodos ROS2 ──
+        self.dist_pub  = self.create_publisher(Float32, 'obstacle_distance_esp', 10)
+        self.conv_pub  = self.create_publisher(Bool,    'conveyor_status',   10)
+
+        # ── Puerto serial ──
         self.serial_port = '/dev/ttyUSB0'
-        self.baudrate = 115200
-        self.timeout = 1.0
+        self.baudrate    = 115200
+        self.ser         = None
+        self._stop       = False
+        self._lock       = threading.Lock()   # protege escrituras concurrentes
 
         try:
-            self.ser = serial.Serial(self.serial_port, self.baudrate, timeout=self.timeout)
-            self.get_logger().info(f"Serial abierto en {self.serial_port} @ {self.baudrate}")
+            self.ser = serial.Serial(
+                self.serial_port, self.baudrate, timeout=1.0)
+            self.get_logger().info(
+                f"Serial abierto: {self.serial_port} @ {self.baudrate}")
+            self.read_thread = threading.Thread(
+                target=self.read_loop, daemon=True)
+            self.read_thread.start()
         except Exception as e:
-            self.get_logger().error(f"No se pudo abrir serial {self.serial_port}: {e}")
-            self.ser = None
+            self.get_logger().error(f"No se pudo abrir serial: {e}")
 
-        self._stop = False
-        if self.ser:
-            self.thread = threading.Thread(target=self.read_loop, daemon=True)
-            self.thread.start()
-
-        # Watchdog: si no llegan DIST en X segundos, publicar distancia grande segura
+        # ── Watchdog: si no llegan DIST en 2s publica distancia segura ──
         self.last_dist_time = time.time()
-        self.watchdog_timer = self.create_timer(1.0, self.watchdog_check)
+        self.create_timer(1.0, self.watchdog_check)
+
+    # ────────────────────────────────────────────
+    # Callbacks de subscripciones
+    # ────────────────────────────────────────────
+
+    def cb_motor_speeds(self, msg: Float32MultiArray):
+        vals = msg.data
+        if len(vals) == 0:
+            return
+        left  = float(vals[0]) if len(vals) >= 1 else 0.0
+        right = float(vals[1]) if len(vals) >= 2 else left
+        left  = max(-1.0, min(1.0, left))
+        right = max(-1.0, min(1.0, right))
+        self.send(f"MOT:L:{left:.2f},R:{right:.2f}")
+
+    def cb_rudder(self, msg: Float32):
+        angle = max(-45.0, min(45.0, msg.data))
+        self.send(f"SRV:{angle:.1f}")
+
+    def cb_conveyor(self, msg: Bool):
+        self.send("CONV:ON" if msg.data else "CONV:OFF")
+
+    # ────────────────────────────────────────────
+    # Envío serial (thread-safe)
+    # ────────────────────────────────────────────
+
+    def send(self, line: str):
+        if not self.ser:
+            return
+        with self._lock:
+            try:
+                self.ser.write((line + '\n').encode('utf-8'))
+                self.get_logger().debug(f"TX → ESP32: {line}")
+            except Exception as e:
+                self.get_logger().error(f"Error TX serial: {e}")
+
+    # ────────────────────────────────────────────
+    # Lectura serial en hilo separado
+    # ────────────────────────────────────────────
 
     def read_loop(self):
         while not self._stop:
             try:
-                line = self.ser.readline().decode('utf-8', errors='ignore').strip()
+                raw = self.ser.readline()
+                line = raw.decode('utf-8', errors='ignore').strip()
                 if not line:
                     continue
-                # parsear
+                self.get_logger().debug(f"RX ← ESP32: {line}")
+
                 if line.startswith("DIST:"):
                     try:
-                        val = float(line.split(":",1)[1])
+                        val = float(line.split(":", 1)[1])
                         msg = Float32()
                         msg.data = val
                         self.dist_pub.publish(msg)
-                        self.get_logger().debug(f"DIST publicado: {val}")
                         self.last_dist_time = time.time()
                     except ValueError:
-                        self.get_logger().warn(f"Valor DIST inválido: {line}")
+                        self.get_logger().warn(f"DIST invalido: {line}")
+
                 elif line.startswith("CONV:"):
-                    state = line.split(":",1)[1].upper() == "ON"
+                    state = line.split(":", 1)[1].upper() == "ON"
                     msg = Bool()
                     msg.data = state
                     self.conv_pub.publish(msg)
-                    self.get_logger().info(f"CONV publicado: {'ON' if state else 'OFF'}")
+
                 elif line.startswith("HB:"):
-                    # opcional: heartbeat
-                    pass
+                    pass  # heartbeat, ignorar
+
                 else:
-                    self.get_logger().debug(f"Linea serial no reconocida: {line}")
+                    self.get_logger().debug(f"Linea no reconocida: {line}")
+
             except Exception as e:
-                self.get_logger().error(f"Error leyendo serial: {e}")
+                if not self._stop:
+                    self.get_logger().error(f"Error RX serial: {e}")
                 time.sleep(0.5)
 
+    # ────────────────────────────────────────────
+    # Watchdog
+    # ────────────────────────────────────────────
+
     def watchdog_check(self):
-        # Si no hay lectura reciente, publicar distancia grande para seguridad
         if time.time() - self.last_dist_time > 2.0:
             msg = Float32()
             msg.data = 9999.0
             self.dist_pub.publish(msg)
-            self.get_logger().warn("No se reciben DIST desde ESP32, publicando distancia segura 9999")
+            self.get_logger().warn(
+                "Sin DIST desde ESP32 — publicando distancia segura 9999")
 
     def destroy_node(self):
         self._stop = True
         if self.ser:
             try:
                 self.ser.close()
-            except:
+            except Exception:
                 pass
         super().destroy_node()
+
 
 def main(args=None):
     rclpy.init(args=args)

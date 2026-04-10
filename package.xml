@@ -1,17 +1,29 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>barco_autonomo_tmr</name>
-  <version>0.0.1</version>
-  <description>Paquete ROS2 para control de barco autónomo</description>
+  <name>barco_control</name>
+  <version>1.0.0</version>
+  <description>Paquete ROS2 para control de barco autónomo TMR México</description>
+
   <maintainer email="lucasrosasdiego@gmail.com">Cienticeromalote</maintainer>
   <license>Apache License 2.0</license>
 
-  <!-- Dependencias de compilación y ejecución -->
-  <buildtool_depend>ament_python</buildtool_depend>
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>launch</exec_depend>
-  <exec_depend>launch_ros</exec_depend>
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>cv_bridge</depend>
+
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-serial</exec_depend>
+  <exec_depend>python3-smbus2</exec_depend>
+  <exec_depend>python3-rpi.gpio</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
 </package>
