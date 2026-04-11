@@ -19,7 +19,7 @@ def generate_launch_description():
         name='esp_bridge_node',
         output='screen',
         parameters=[{
-            'serial_port': '/dev/ttyUSB0',
+            'serial_port': '/dev/ttyACM0',
             'baudrate':    115200,
         }]
     )

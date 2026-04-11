@@ -43,7 +43,7 @@ class ESPBridgeNode(Node):
         self.conv_pub  = self.create_publisher(Bool,    'conveyor_status',   10)
 
         # ── Puerto serial ──
-        self.serial_port = '/dev/ttyUSB0'
+        self.serial_port = '/dev/ttyACM0'
         self.baudrate    = 115200
         self.ser         = None
         self._stop       = False
