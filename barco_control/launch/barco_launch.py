@@ -74,11 +74,12 @@ def generate_launch_description():
             'min_area':      500.0,
             'publish_image': False,   # True para debug con rqt
             # Ajustar color HSV según las figuras de la competencia
-            # Naranja: [10,100,100] - [25,255,255]
-            # Rojo:    [0,100,100]  - [10,255,255]
-            # Amarillo:[25,100,100] - [35,255,255]
-            'hsv_lower': [10, 100, 100],
-            'hsv_upper': [25, 255, 255],
+            # Verde = recoger
+            'hsv_lower_verde': [43, 50, 40],
+            'hsv_upper_verde': [68, 255, 255],
+            # Rojo = evadir
+            'hsv_lower_rojo': [0, 100, 100],
+            'hsv_upper_rojo': [32, 255, 255],
         }]
     )
 

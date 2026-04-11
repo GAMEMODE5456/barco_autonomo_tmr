@@ -68,9 +68,11 @@ class NavigationNode(Node):
 
         # Datos de sensores
         self.target_detected = False
-        self.target_x        = 0.0   # -1=izq, 0=centro, +1=der
-        self.target_y        = 0.0   #  0=arriba, 1=abajo
-        self.target_area     = 0.0   #  0..1
+        self.target_x        = 0.0
+        self.target_y        = 0.0
+        self.target_area     = 0.0
+        self.danger_detected = False
+        self.danger_x        = 0.0
         self.obstacle_dist   = 9999.0
         self.imu_yaw         = 0.0
         self.gps_lat         = None
@@ -84,6 +86,10 @@ class NavigationNode(Node):
             Bool, 'target_detected', self.cb_detected, 10)
         self.create_subscription(
             Float32MultiArray, 'target_position', self.cb_position, 10)
+        self.create_subscription(
+            Bool, 'danger_detected', self.cb_danger_detected, 10)
+        self.create_subscription(
+            Float32MultiArray, 'danger_position', self.cb_danger_position, 10)
         self.create_subscription(
             Float32, 'obstacle_distance', self.cb_obstacle, 10)
         self.create_subscription(
@@ -121,6 +127,13 @@ class NavigationNode(Node):
             self.target_x    = msg.data[0]
             self.target_y    = msg.data[1]
             self.target_area = msg.data[2]
+
+    def cb_danger_detected(self, msg: Bool):
+        self.danger_detected = msg.data
+
+    def cb_danger_position(self, msg: Float32MultiArray):
+        if len(msg.data) >= 1:
+            self.danger_x = msg.data[0]
 
     def cb_obstacle(self, msg: Float32):
         self.obstacle_dist = msg.data
@@ -193,7 +206,13 @@ class NavigationNode(Node):
 
     def control_loop(self):
 
-        # ── Prioridad máxima: obstáculo muy cerca → EVADIR ──
+        # ── Prioridad 1: sargaso rojo cerca → EVADIR ──
+        if (self.danger_detected
+                and self.estado != Estado.EVADIR):
+            self.get_logger().warn("Sargaso ROJO detectado → EVADIR")
+            self._cambiar_estado(Estado.EVADIR)
+
+        # ── Prioridad 2: obstáculo físico muy cerca → EVADIR ──
         if (self.obstacle_dist < self.obs_stop
                 and self.estado != Estado.EVADIR):
             self._cambiar_estado(Estado.EVADIR)
