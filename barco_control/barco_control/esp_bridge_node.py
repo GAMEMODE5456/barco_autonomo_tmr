@@ -12,8 +12,8 @@ class ESPBridgeNode(Node):
     Recibe datos seriales del ESP32 y los publica como topics.
 
     Protocolo serial (Raspberry → ESP32):
-      MOT:L:0.50,R:0.50\\n   velocidad motores [-1.0 .. 1.0]
-      SRV:90.0\\n             angulo servo timon [-45 .. 45]
+      MOT:0.50\\n             velocidad motor unico [-1.0 .. 1.0]
+      SRV:30.0\\n             angulo servo timon [-60 .. 60]
       CONV:ON\\n / CONV:OFF\\n banda transportadora
 
     Protocolo serial (ESP32 → Raspberry):
@@ -39,8 +39,8 @@ class ESPBridgeNode(Node):
             self.cb_conveyor, 10)
 
         # ── Publishers hacia otros nodos ROS2 ──
-        self.dist_pub  = self.create_publisher(Float32, 'obstacle_distance_esp', 10)
-        self.conv_pub  = self.create_publisher(Bool,    'conveyor_status',   10)
+        self.dist_pub = self.create_publisher(Float32, 'obstacle_distance_esp', 10)
+        self.conv_pub = self.create_publisher(Bool,    'conveyor_status',       10)
 
         # ── Puerto serial ──
         self.serial_port = '/dev/ttyACM0'
@@ -69,17 +69,17 @@ class ESPBridgeNode(Node):
     # ────────────────────────────────────────────
 
     def cb_motor_speeds(self, msg: Float32MultiArray):
+        """Recibe [velocidad] de motor_node y lo envía al ESP32."""
         vals = msg.data
         if len(vals) == 0:
             return
-        left  = float(vals[0]) if len(vals) >= 1 else 0.0
-        right = float(vals[1]) if len(vals) >= 2 else left
-        left  = max(-1.0, min(1.0, left))
-        right = max(-1.0, min(1.0, right))
-        self.send(f"MOT:L:{left:.2f},R:{right:.2f}")
+        vel = float(vals[0])
+        vel = max(-1.0, min(1.0, vel))
+        self.send(f"MOT:{vel:.2f}")
 
     def cb_rudder(self, msg: Float32):
-        angle = max(-45.0, min(45.0, msg.data))
+        """Rango ampliado a ±60°."""
+        angle = max(-60.0, min(60.0, msg.data))
         self.send(f"SRV:{angle:.1f}")
 
     def cb_conveyor(self, msg: Bool):
@@ -106,7 +106,7 @@ class ESPBridgeNode(Node):
     def read_loop(self):
         while not self._stop:
             try:
-                raw = self.ser.readline()
+                raw  = self.ser.readline()
                 line = raw.decode('utf-8', errors='ignore').strip()
                 if not line:
                     continue

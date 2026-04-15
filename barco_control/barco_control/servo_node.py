@@ -4,29 +4,23 @@ from std_msgs.msg import Float32
 
 class ServoNode(Node):
     """
-    Nodo del timón (servo).
+    Nodo del timón (servo) — rango ampliado a ±60°.
 
-    ARQUITECTURA CORRECTA:
-      navigation_node → publica 'rudder_angle' (Float32, grados -45..45)
+    ARQUITECTURA:
+      navigation_node → publica 'rudder_angle' (Float32, grados -60..60)
       servo_node      → suscribe 'rudder_angle', valida y re-publica
       esp_bridge_node → suscribe 'rudder_angle', envía "SRV:XX.X" al ESP32
       ESP32           → recibe serial, mueve servo via PCA9685 CH1
 
-    Este nodo NO accede al PCA9685 directamente porque el PCA9685
-    está conectado al ESP32, no a la Raspberry Pi.
-
-    El nodo agrega:
-      - Validación de rango
-      - Suavizado de movimiento (filtro de paso bajo)
-      - Logging del estado actual
+    El rango se amplió de ±45° a ±60° para mayor maniobrabilidad.
     """
 
     def __init__(self):
         super().__init__('servo_node')
 
-        # Parámetros configurables
-        self.declare_parameter('min_angle', -45.0)
-        self.declare_parameter('max_angle',  45.0)
+        # Parámetros configurables — rango ampliado a ±60°
+        self.declare_parameter('min_angle', -60.0)
+        self.declare_parameter('max_angle',  60.0)
         self.declare_parameter('smooth_factor', 0.3)  # 0=sin suavizado, 1=muy suave
 
         self.min_angle     = self.get_parameter('min_angle').value
@@ -41,8 +35,6 @@ class ServoNode(Node):
             self.cb_rudder, 10)
 
         # Publisher: ángulo validado y suavizado
-        # esp_bridge_node también está suscrito a 'rudder_angle'
-        # así que este nodo solo hace validación y logging
         self.angle_pub = self.create_publisher(
             Float32, 'rudder_angle_actual', 10)
 
@@ -55,7 +47,7 @@ class ServoNode(Node):
     def cb_rudder(self, msg: Float32):
         target = float(msg.data)
 
-        # Validar rango
+        # Validar rango ±60°
         target = max(self.min_angle, min(self.max_angle, target))
 
         # Filtro de paso bajo — suaviza movimientos bruscos
