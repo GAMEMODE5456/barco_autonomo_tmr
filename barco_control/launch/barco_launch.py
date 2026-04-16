@@ -101,8 +101,8 @@ def generate_launch_description():
         name='servo_node',
         output='screen',
         parameters=[{
-            'min_angle':     -45.0,
-            'max_angle':      45.0,
+            'min_angle':     -60.0,
+            'max_angle':      60.0,
             'smooth_factor':  0.3,
         }]
     )
@@ -127,8 +127,8 @@ def generate_launch_description():
             'search_turn_speed': 0.25,
             'approach_speed':    0.45,
             'collect_speed':     0.20,
-            'max_rudder':        35.0,
-            'rudder_kp':         40.0,
+            'max_rudder':        55.0,
+            'rudder_kp':         55.0,
             'center_threshold':  0.12,
             'collect_area':      0.15,
             'obstacle_stop_cm':  40.0,

@@ -21,6 +21,7 @@
 
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>
+#include <ESP32Servo.h>
 
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
 
@@ -29,7 +30,7 @@ Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
 #define CH_TIMON   1   // Servo timón
 
 // ── Valores PWM para ESC (ajustar según calibración) ──
-#define ESC_NEUTRO  307
+#define ESC_NEUTRO  310
 #define ESC_MIN     260   // reversa máxima
 #define ESC_MAX     360   // adelante máximo
 
@@ -200,12 +201,12 @@ void loop() {
   }
 
   // Watchdog: sin comandos → stop motor
-  if (millis() - lastCmd > WATCHDOG_MS) {
-    if (abs(motorVel) > 0.01) {
-      stopMotor();
-      Serial.println("WDG:STOP");
-    }
-  }
+  //if (millis() - lastCmd > WATCHDOG_MS) {
+    //if (abs(motorVel) > 0.01) {
+      //stopMotor();
+      //Serial.println("WDG:STOP");
+    //}
+  //}
 
   // Ultrasónico cada 200ms
   static unsigned long lastSonar = 0;

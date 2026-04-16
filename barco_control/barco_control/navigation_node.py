@@ -287,24 +287,19 @@ class NavigationNode(Node):
                 f"Recolección completada ({self.collect_time}s) → BUSCAR")
             self._stop()
             self._cambiar_estado(Estado.BUSCAR)
-
+# En _estado_evadir cambiar retroceso por parar
     def _estado_evadir(self):
-        """Retrocede y gira para esquivar obstáculo o sargaso rojo."""
-        t = self._tiempo_en_estado()
-
-        if t < 0.8:
-            self._set_motor(-0.3)
-            self._set_rudder(0.0)
-        elif t < 1.6:
-            self._set_motor(0.3)
-            self._set_rudder(self.max_rudder)
-        else:
-            self._stop()
-            estado_retorno = self.estado_previo if self.estado_previo else Estado.BUSCAR
-            self._cambiar_estado(estado_retorno)
-
-        self.get_logger().debug(
-            f"EVADIR t={t:.1f}s dist={self.obstacle_dist:.1f}cm")
+    t = self._tiempo_en_estado()
+    if t < 0.8:
+        self._set_motor(0.0)   # parar en lugar de -0.3
+        self._set_rudder(self.max_rudder)  # girar con timón
+    elif t < 1.6:
+        self._set_motor(0.3)
+        self._set_rudder(self.max_rudder)
+    else:
+        self._stop()
+        estado_retorno = self.estado_previo if self.estado_previo else Estado.BUSCAR
+        self._cambiar_estado(estado_retorno)
 
 
 def main(args=None):
