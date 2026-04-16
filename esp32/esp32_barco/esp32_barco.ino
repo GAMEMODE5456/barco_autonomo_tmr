@@ -166,18 +166,22 @@ void procesarLinea(String line) {
 // ────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
-
-  Wire.begin(8, 9);   // SDA=GPIO8, SCL=GPIO9
+  Wire.begin(8, 9);
   pwm.begin();
   pwm.setPWMFreq(50);
 
-  stopMotor();
+  delay(500);
+
+  // Secuencia de armado ESC ZMR
+  pwm.setPWM(CH_MOTOR, 0, ESC_MAX);   // maximo
+  delay(2000);
+  pwm.setPWM(CH_MOTOR, 0, ESC_NEUTRO); // neutro
   setTimon(0.0);
+  delay(2000);
 
   pinMode(CONV_IN1, OUTPUT);
   pinMode(CONV_IN2, OUTPUT);
   setBanda(false);
-
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
 
