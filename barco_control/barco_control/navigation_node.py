@@ -5,40 +5,26 @@ from sensor_msgs.msg import NavSatFix, Imu
 import time
 
 # ─────────────────────────────────────────────────────────
-# ESTADOS
+# ESTADOS DE LA MÁQUINA
 # ─────────────────────────────────────────────────────────
 class Estado:
     BUSCAR    = 'BUSCAR'
     APUNTAR   = 'APUNTAR'
     ACERCARSE = 'ACERCARSE'
     RECOGER   = 'RECOGER'
-    GIRAR     = 'GIRAR'     # antes EVADIR — ahora solo corrige rumbo ante boyas
+    EVADIR    = 'EVADIR'
 
 
 class NavigationNode(Node):
     """
-    Máquina de estados para navegación autónoma.
-    Un solo motor brushless unidireccional + servo timón ±60°.
+    Máquina de estados para navegación autónoma del barco.
+    Un solo motor brushless + servo timón ±60°.
 
-    Lógica de boyas:
-      Las boyas delimitan la zona — el barco NO debe salir.
-      Cuando detecta boya → GIRAR hacia el interior (opuesto a la boya).
-      No retrocede, solo corrige rumbo y sigue avanzando.
-
-    Topics suscritos:
-      target_detected  (Bool)              — sargaso verde o café
-      target_position  (Float32MultiArray) — [x, y, area]
-      boya_detected    (Bool)              — boya roja/naranja
-      boya_position    (Float32MultiArray) — [x, y, area]
-      obstacle_distance(Float32)
-      imu_data         (Imu)
-      gps_data         (NavSatFix)
-
-    Topics publicados:
-      motor_speed    (Float32)
-      rudder_angle   (Float32)
-      conveyor_power (Bool)
-      nav_state      (String)
+    Publica:
+      'motor_speed'   (Float32)  → motor_node
+      'rudder_angle'  (Float32)  → servo_node + esp_bridge_node
+      'conveyor_power'(Bool)
+      'nav_state'     (String)
     """
 
     def __init__(self):
@@ -46,17 +32,16 @@ class NavigationNode(Node):
 
         # ── Parámetros ────────────────────────────────────
         self.declare_parameter('search_turn_speed',  0.25)
-        self.declare_parameter('approach_speed',     0.40)
+        self.declare_parameter('approach_speed',     0.45)
         self.declare_parameter('collect_speed',      0.20)
         self.declare_parameter('max_rudder',         55.0)
         self.declare_parameter('rudder_kp',          55.0)
-        self.declare_parameter('center_threshold',   0.15)
+        self.declare_parameter('center_threshold',   0.12)
         self.declare_parameter('collect_area',       0.15)
-        self.declare_parameter('obstacle_stop_cm',   30.0)
+        self.declare_parameter('obstacle_stop_cm',   40.0)
+        self.declare_parameter('obstacle_evade_cm',  80.0)
         self.declare_parameter('collect_time',        3.0)
         self.declare_parameter('search_timeout',      8.0)
-        self.declare_parameter('boya_threshold',      0.6)  # x_norm para considerar boya "muy cerca"
-        self.declare_parameter('girar_time',          1.5)  # segundos girando para esquivar boya
 
         self.search_turn    = self.get_parameter('search_turn_speed').value
         self.approach_spd   = self.get_parameter('approach_speed').value
@@ -66,10 +51,9 @@ class NavigationNode(Node):
         self.center_thr     = self.get_parameter('center_threshold').value
         self.collect_area   = self.get_parameter('collect_area').value
         self.obs_stop       = self.get_parameter('obstacle_stop_cm').value
+        self.obs_evade      = self.get_parameter('obstacle_evade_cm').value
         self.collect_time   = self.get_parameter('collect_time').value
         self.search_timeout = self.get_parameter('search_timeout').value
-        self.boya_thr       = self.get_parameter('boya_threshold').value
-        self.girar_time     = self.get_parameter('girar_time').value
 
         # ── Estado ────────────────────────────────────────
         self.estado        = Estado.BUSCAR
@@ -81,32 +65,26 @@ class NavigationNode(Node):
         self.target_x        = 0.0
         self.target_y        = 0.0
         self.target_area     = 0.0
-        self.boya_detected   = False
-        self.boya_x          = 0.0
-        self.boya_area       = 0.0
+        self.danger_detected = False
+        self.danger_x        = 0.0
         self.obstacle_dist   = 9999.0
         self.imu_yaw         = 0.0
         self.gps_lat         = None
         self.gps_lon         = None
         self.conveyor_activa = False
 
-        # Timeout danger para evitar falsos positivos sin cámara
-        self.last_boya_time   = time.time() - 10.0
-        self.last_target_time = time.time() - 10.0
-        self.SENSOR_TIMEOUT   = 1.0  # segundos sin mensaje → resetear
-
-        # Dirección de búsqueda
-        self._search_dir = 1.0
+        # Dirección de búsqueda (alterna cada timeout)
+        self._search_dir = 1.0   # +1 derecha, -1 izquierda
 
         # ── Suscripciones ─────────────────────────────────
         self.create_subscription(
-            Bool, 'target_detected', self.cb_target_detected, 10)
+            Bool, 'target_detected', self.cb_detected, 10)
         self.create_subscription(
-            Float32MultiArray, 'target_position', self.cb_target_position, 10)
+            Float32MultiArray, 'target_position', self.cb_position, 10)
         self.create_subscription(
-            Bool, 'boya_detected', self.cb_boya_detected, 10)
+            Bool, 'danger_detected', self.cb_danger_detected, 10)
         self.create_subscription(
-            Float32MultiArray, 'boya_position', self.cb_boya_position, 10)
+            Float32MultiArray, 'danger_position', self.cb_danger_position, 10)
         self.create_subscription(
             Float32, 'obstacle_distance', self.cb_obstacle, 10)
         self.create_subscription(
@@ -115,10 +93,14 @@ class NavigationNode(Node):
             NavSatFix, 'gps_data', self.cb_gps, 10)
 
         # ── Publishers ────────────────────────────────────
-        self.motor_pub    = self.create_publisher(Float32, 'motor_speed',    10)
-        self.rudder_pub   = self.create_publisher(Float32, 'rudder_angle',   10)
-        self.conveyor_pub = self.create_publisher(Bool,    'conveyor_power', 10)
-        self.estado_pub   = self.create_publisher(String,  'nav_state',      10)
+        self.motor_pub    = self.create_publisher(
+            Float32, 'motor_speed',    10)
+        self.rudder_pub   = self.create_publisher(
+            Float32, 'rudder_angle',   10)
+        self.conveyor_pub = self.create_publisher(
+            Bool,    'conveyor_power', 10)
+        self.estado_pub   = self.create_publisher(
+            String,  'nav_state',      10)
 
         self.create_timer(0.1, self.control_loop)
 
@@ -129,27 +111,21 @@ class NavigationNode(Node):
     # Callbacks
     # ─────────────────────────────────────────────────────
 
-    def cb_target_detected(self, msg: Bool):
+    def cb_detected(self, msg: Bool):
         self.target_detected = msg.data
-        if msg.data:
-            self.last_target_time = time.time()
 
-    def cb_target_position(self, msg: Float32MultiArray):
+    def cb_position(self, msg: Float32MultiArray):
         if len(msg.data) >= 3:
             self.target_x    = msg.data[0]
             self.target_y    = msg.data[1]
             self.target_area = msg.data[2]
 
-    def cb_boya_detected(self, msg: Bool):
-        self.boya_detected = msg.data
-        if msg.data:
-            self.last_boya_time = time.time()
+    def cb_danger_detected(self, msg: Bool):
+        self.danger_detected = msg.data
 
-    def cb_boya_position(self, msg: Float32MultiArray):
+    def cb_danger_position(self, msg: Float32MultiArray):
         if len(msg.data) >= 1:
-            self.boya_x = msg.data[0]
-        if len(msg.data) >= 3:
-            self.boya_area = msg.data[2]
+            self.danger_x = msg.data[0]
 
     def cb_obstacle(self, msg: Float32):
         self.obstacle_dist = msg.data
@@ -166,7 +142,7 @@ class NavigationNode(Node):
     # ─────────────────────────────────────────────────────
 
     def _set_motor(self, vel: float):
-        vel = max(0.0, min(1.0, vel))  # unidireccional
+        vel = max(-1.0, min(1.0, vel))
         msg = Float32()
         msg.data = vel
         self.motor_pub.publish(msg)
@@ -205,62 +181,43 @@ class NavigationNode(Node):
         rudder = self.target_x * self.rudder_kp
         return max(-self.max_rudder, min(self.max_rudder, rudder))
 
-    def _boya_activa(self) -> bool:
-        """True si hay boya detectada recientemente (con timeout)."""
-        if time.time() - self.last_boya_time > self.SENSOR_TIMEOUT:
-            self.boya_detected = False
-        return self.boya_detected
-
-    def _target_activo(self) -> bool:
-        """True si hay sargaso detectado recientemente (con timeout)."""
-        if time.time() - self.last_target_time > self.SENSOR_TIMEOUT:
-            self.target_detected = False
-        return self.target_detected
-
     # ─────────────────────────────────────────────────────
     # Loop principal
     # ─────────────────────────────────────────────────────
 
     def control_loop(self):
 
-        # Actualizar timeouts
-        boya_cerca   = self._boya_activa()
-        target_cerca = self._target_activo()
+        # Prioridad 1: sargaso rojo → EVADIR
+        if self.danger_detected and self.estado != Estado.EVADIR:
+            self.get_logger().warn("Sargaso ROJO detectado → EVADIR")
+            self._cambiar_estado(Estado.EVADIR)
 
-        # Prioridad 1: boya detectada → GIRAR (no salir de zona)
-        if boya_cerca and self.estado != Estado.GIRAR:
-            self.get_logger().warn(
-                f"BOYA detectada x={self.boya_x:+.2f} → GIRAR")
-            self._cambiar_estado(Estado.GIRAR)
-
-        # Prioridad 2: obstáculo físico muy cerca → GIRAR
-        if (self.obstacle_dist < self.obs_stop
-                and self.estado != Estado.GIRAR):
-            self.get_logger().warn(
-                f"Obstáculo a {self.obstacle_dist:.1f}cm → GIRAR")
-            self._cambiar_estado(Estado.GIRAR)
+        # Prioridad 2: obstáculo físico → EVADIR
+        if self.obstacle_dist < self.obs_stop and self.estado != Estado.EVADIR:
+            self._cambiar_estado(Estado.EVADIR)
 
         if self.estado == Estado.BUSCAR:
-            self._estado_buscar(target_cerca)
+            self._estado_buscar()
         elif self.estado == Estado.APUNTAR:
-            self._estado_apuntar(target_cerca)
+            self._estado_apuntar()
         elif self.estado == Estado.ACERCARSE:
-            self._estado_acercarse(target_cerca)
+            self._estado_acercarse()
         elif self.estado == Estado.RECOGER:
             self._estado_recoger()
-        elif self.estado == Estado.GIRAR:
-            self._estado_girar(boya_cerca)
+        elif self.estado == Estado.EVADIR:
+            self._estado_evadir()
 
     # ─────────────────────────────────────────────────────
     # ESTADOS
     # ─────────────────────────────────────────────────────
 
-    def _estado_buscar(self, target_cerca: bool):
+    def _estado_buscar(self):
         """
-        Avanza girando con timón al máximo para barrer la zona.
+        Avanza girando con timón al máximo para barrer el área.
+        Con un solo motor no puede girar en el lugar.
         Alterna dirección cada search_timeout segundos.
         """
-        if target_cerca:
+        if self.target_detected:
             self._cambiar_estado(Estado.APUNTAR)
             return
 
@@ -268,13 +225,14 @@ class NavigationNode(Node):
         self._set_rudder(self.max_rudder * self._search_dir)
 
         if self._tiempo_en_estado() > self.search_timeout:
-            self._search_dir *= -1
+            self._search_dir *= -1   # alternar dirección
             self.estado_inicio = time.time()
-            self.get_logger().warn("Sin sargaso — cambiando dirección de búsqueda")
+            self.get_logger().warn(
+                f"Sin objeto — cambiando dirección de búsqueda")
 
-    def _estado_apuntar(self, target_cerca: bool):
-        """Corrige el timón para centrar el sargaso en el frame."""
-        if not target_cerca:
+    def _estado_apuntar(self):
+        """Corrige el timón para centrar el objeto en el frame."""
+        if not self.target_detected:
             self._cambiar_estado(Estado.BUSCAR)
             return
 
@@ -291,9 +249,9 @@ class NavigationNode(Node):
         self.get_logger().debug(
             f"APUNTAR error_x={error_x:.2f} rudder={rudder:.1f}°")
 
-    def _estado_acercarse(self, target_cerca: bool):
-        """Avanza hacia el sargaso corrigiendo el timón."""
-        if not target_cerca:
+    def _estado_acercarse(self):
+        """Avanza hacia el objeto corrigiendo el timón continuamente."""
+        if not self.target_detected:
             self._cambiar_estado(Estado.APUNTAR)
             return
 
@@ -306,6 +264,12 @@ class NavigationNode(Node):
 
         factor = 1.0 - abs(self.target_x) * 0.4
         spd    = self.approach_spd * factor
+
+        if self.obstacle_dist < self.obs_evade:
+            reduccion = 1.0 - (
+                (self.obs_evade - self.obstacle_dist) / self.obs_evade)
+            spd *= max(0.1, reduccion)
+
         self._set_motor(spd)
 
         self.get_logger().debug(
@@ -313,7 +277,7 @@ class NavigationNode(Node):
             f"x={self.target_x:.2f} spd={spd:.2f}")
 
     def _estado_recoger(self):
-        """Avanza despacio para recoger el sargaso con la banda."""
+        """Avanza despacio para recoger el objeto con la banda."""
         rudder = self._rudder_desde_camara()
         self._set_rudder(rudder)
         self._set_motor(self.collect_spd)
@@ -323,45 +287,19 @@ class NavigationNode(Node):
                 f"Recolección completada ({self.collect_time}s) → BUSCAR")
             self._stop()
             self._cambiar_estado(Estado.BUSCAR)
-
-    def _estado_girar(self, boya_cerca: bool):
-        """
-        Gira hacia el interior de la zona cuando detecta una boya.
-        NO retrocede — solo corrige el rumbo girando en sentido opuesto a la boya.
-
-        Lógica:
-          boya a la izquierda  (boya_x < 0) → girar a la derecha (rudder +)
-          boya a la derecha    (boya_x > 0) → girar a la izquierda (rudder -)
-          boya al centro       (boya_x ≈ 0) → girar a la derecha por defecto
-        """
-        t = self._tiempo_en_estado()
-
-        # Determinar dirección de giro (opuesta a la boya)
-        if self.boya_x <= 0:
-            rudder_giro = self.max_rudder    # girar derecha
-        else:
-            rudder_giro = -self.max_rudder   # girar izquierda
-
-        if t < self.girar_time:
-            # Girar avanzando despacio hacia el interior
-            self._set_motor(self.search_turn * 0.8)
-            self._set_rudder(rudder_giro)
-            self.get_logger().debug(
-                f"GIRAR t={t:.1f}s boya_x={self.boya_x:.2f} "
-                f"rudder={rudder_giro:.0f}°")
-        else:
-            # Terminó el giro — volver al estado anterior
-            self._stop()
-            estado_retorno = self.estado_previo if self.estado_previo else Estado.BUSCAR
-
-            # Si la boya sigue ahí, seguir girando
-            if boya_cerca:
-                self.estado_inicio = time.time()  # reiniciar timer
-                self.get_logger().warn("Boya aún visible — continuando giro")
-            else:
-                self._cambiar_estado(estado_retorno)
-                self.get_logger().info(
-                    f"Boya esquivada → {estado_retorno}")
+# En _estado_evadir cambiar retroceso por parar
+    def _estado_evadir(self):
+     t = self._tiempo_en_estado()
+     if t < 0.8:
+        self._set_motor(0.0)   # parar en lugar de -0.3
+        self._set_rudder(self.max_rudder)  # girar con timón
+     elif t < 1.6:
+        self._set_motor(0.3)
+        self._set_rudder(self.max_rudder)
+     else:
+        self._stop()
+        estado_retorno = self.estado_previo if self.estado_previo else Estado.BUSCAR
+        self._cambiar_estado(estado_retorno)
 
 
 def main(args=None):

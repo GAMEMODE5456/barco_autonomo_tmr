@@ -131,7 +131,7 @@ def generate_launch_description():
             'rudder_kp':         55.0,
             'center_threshold':  0.12,
             'collect_area':      0.15,
-            'obstacle_stop_cm':  40.0,
+            'obstacle_stop_cm':  10.0,
             'obstacle_evade_cm': 80.0,
             'collect_time':       3.0,
             'search_timeout':    8.0,
