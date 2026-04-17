@@ -199,7 +199,15 @@ void loop() {
     String line = Serial.readStringUntil('\n');
     procesarLinea(line);
   }
-
+  // Debug: mostrar todo lo que llega
+  while (Serial.available()) {
+    String line = Serial.readStringUntil('\n');
+    line.trim();
+    Serial.print("Recibido: [");
+    Serial.print(line);
+    Serial.println("]");
+    procesarLinea(line);
+  }
   // Watchdog: sin comandos → stop motor
   //if (millis() - lastCmd > WATCHDOG_MS) {
     //if (abs(motorVel) > 0.01) {
@@ -222,4 +230,5 @@ void loop() {
     Serial.println("HB:OK");
     lastHeartbeat = millis();
   }
+  
 }
