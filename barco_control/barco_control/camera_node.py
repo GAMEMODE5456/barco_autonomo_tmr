@@ -9,46 +9,65 @@ import threading
 
 class CameraNode(Node):
     """
-    Detecta dos colores de sargaso:
-      Verde → recoger  → publica en 'target_detected' y 'target_position'
-      Rojo  → evadir   → publica en 'danger_detected' y 'danger_position'
+    Detecta tres tipos de objetos:
+      Verde  → sargaso verde  → recoger  → 'target_detected' / 'target_position'
+      Cafe   → sargaso cafe   → recoger  → 'target2_detected' / 'target2_position'
+      Boya   → boya roja      → limite   → 'boya_detected' / 'boya_position'
+
+    Prioridad de publicación de target:
+      Si hay verde Y café visibles, publica el más grande como target principal.
+      Las boyas siempre se publican en su propio topic.
     """
 
     def __init__(self):
         super().__init__('camera_node')
 
-        self.declare_parameter('camera_index',      0)
-        self.declare_parameter('frame_width',       640)
-        self.declare_parameter('frame_height',      480)
-        self.declare_parameter('fps',               30)
-        self.declare_parameter('min_area',          500.0)
-        self.declare_parameter('publish_image',     False)
-        self.declare_parameter('hsv_lower_verde', [43, 50, 40])
-        self.declare_parameter('hsv_upper_verde', [68, 255, 255])
-        self.declare_parameter('hsv_lower_rojo',  [0, 100, 100])
-        self.declare_parameter('hsv_upper_rojo',  [32, 255, 255])
+        # ── Parámetros ──────────────────────────────────
+        self.declare_parameter('camera_index',       0)
+        self.declare_parameter('frame_width',        640)
+        self.declare_parameter('frame_height',       480)
+        self.declare_parameter('fps',                30)
+        self.declare_parameter('min_area',           500.0)
+        self.declare_parameter('publish_image',      False)
 
-        self.cam_idx    = self.get_parameter('camera_index').value
-        self.frame_w    = self.get_parameter('frame_width').value
-        self.frame_h    = self.get_parameter('frame_height').value
-        self.fps        = self.get_parameter('fps').value
-        self.min_area   = self.get_parameter('min_area').value
-        self.pub_image  = self.get_parameter('publish_image').value
+        # Sargaso verde
+        self.declare_parameter('hsv_lower_verde', [35, 60, 60])
+        self.declare_parameter('hsv_upper_verde', [75, 255, 255])
 
-        self.lower_verde = np.array(self.get_parameter('hsv_lower_verde').value)
-        self.upper_verde = np.array(self.get_parameter('hsv_upper_verde').value)
-        self.lower_rojo  = np.array(self.get_parameter('hsv_lower_rojo').value)
-        self.upper_rojo  = np.array(self.get_parameter('hsv_upper_rojo').value)
+        # Sargaso café/morado
+        self.declare_parameter('hsv_lower_cafe',  [120, 40, 30])
+        self.declare_parameter('hsv_upper_cafe',  [170, 180, 150])
 
-        # Publishers verde
-        self.verde_detected_pub = self.create_publisher(Bool,             'target_detected', 10)
-        self.verde_position_pub = self.create_publisher(Float32MultiArray,'target_position',  10)
+        # Boyas rojas/naranjas
+        self.declare_parameter('hsv_lower_boya',  [0, 150, 150])
+        self.declare_parameter('hsv_upper_boya',  [15, 255, 255])
+        self.declare_parameter('hsv_lower_boya2', [160, 150, 150])
+        self.declare_parameter('hsv_upper_boya2', [180, 255, 255])
 
-        # Publishers rojo
-        self.rojo_detected_pub  = self.create_publisher(Bool,             'danger_detected',  10)
-        self.rojo_position_pub  = self.create_publisher(Float32MultiArray,'danger_position',   10)
+        self.cam_idx   = self.get_parameter('camera_index').value
+        self.frame_w   = self.get_parameter('frame_width').value
+        self.frame_h   = self.get_parameter('frame_height').value
+        self.fps       = self.get_parameter('fps').value
+        self.min_area  = self.get_parameter('min_area').value
+        self.pub_image = self.get_parameter('publish_image').value
 
-        self.info_pub = self.create_publisher(String, 'target_info', 10)
+        self.lower_verde  = np.array(self.get_parameter('hsv_lower_verde').value)
+        self.upper_verde  = np.array(self.get_parameter('hsv_upper_verde').value)
+        self.lower_cafe   = np.array(self.get_parameter('hsv_lower_cafe').value)
+        self.upper_cafe   = np.array(self.get_parameter('hsv_upper_cafe').value)
+        self.lower_boya   = np.array(self.get_parameter('hsv_lower_boya').value)
+        self.upper_boya   = np.array(self.get_parameter('hsv_upper_boya').value)
+        self.lower_boya2  = np.array(self.get_parameter('hsv_lower_boya2').value)
+        self.upper_boya2  = np.array(self.get_parameter('hsv_upper_boya2').value)
+
+        # ── Publishers ──────────────────────────────────
+        # Sargaso (verde o café — el más grande)
+        self.target_detected_pub  = self.create_publisher(Bool,              'target_detected',  10)
+        self.target_position_pub  = self.create_publisher(Float32MultiArray, 'target_position',  10)
+
+        # Boyas — límite de zona
+        self.boya_detected_pub    = self.create_publisher(Bool,              'boya_detected',    10)
+        self.boya_position_pub    = self.create_publisher(Float32MultiArray, 'boya_position',    10)
 
         if self.pub_image:
             self.image_pub = self.create_publisher(Image, 'camera_image', 10)
@@ -58,16 +77,26 @@ class CameraNode(Node):
         self._stop  = False
         self._open_camera()
 
-        self.frames_sin_verde = 0
-        self.frames_sin_rojo  = 0
-        self.FRAMES_PERDIDA   = 10
+        # Contadores para filtro de pérdida
+        self.frames_sin_target = 0
+        self.frames_sin_boya   = 0
+        self.FRAMES_PERDIDA    = 10
 
         self._thread = threading.Thread(target=self.capture_loop, daemon=True)
         self._thread.start()
 
-        self.get_logger().info(f"CameraNode listo — cam={self.cam_idx} {self.frame_w}x{self.frame_h}")
-        self.get_logger().info(f"Verde lower={self.lower_verde} upper={self.upper_verde}")
-        self.get_logger().info(f"Rojo  lower={self.lower_rojo}  upper={self.upper_rojo}")
+        self.get_logger().info(
+            f"CameraNode listo — cam={self.cam_idx} {self.frame_w}x{self.frame_h}")
+        self.get_logger().info(
+            f"Verde lower={self.lower_verde} upper={self.upper_verde}")
+        self.get_logger().info(
+            f"Cafe  lower={self.lower_cafe}  upper={self.upper_cafe}")
+        self.get_logger().info(
+            f"Boya  lower={self.lower_boya}  upper={self.upper_boya}")
+
+    # ─────────────────────────────────────────
+    # Abrir cámara
+    # ─────────────────────────────────────────
 
     def _open_camera(self):
         self.cap = cv2.VideoCapture(self.cam_idx)
@@ -79,32 +108,40 @@ class CameraNode(Node):
         self.cap.set(cv2.CAP_PROP_FPS,          self.fps)
         self.get_logger().info("Cámara abierta correctamente")
 
-    def _detectar(self, hsv, lower, upper):
+    # ─────────────────────────────────────────
+    # Detección de color
+    # ─────────────────────────────────────────
+
+    def _detectar(self, hsv, lower, upper, lower2=None, upper2=None):
+        """
+        Retorna (detected, x_norm, y_norm, area_norm, mask)
+        x_norm: -1=izquierda, 0=centro, +1=derecha
+        """
         h, w = hsv.shape[:2]
+
         mask = cv2.inRange(hsv, lower, upper)
 
-        # Rojo cruza el 0/180 en HSV — agregar segundo rango
-        if lower[0] <= 10:
-            mask2 = cv2.inRange(
-                hsv,
-                np.array([170, lower[1], lower[2]]),
-                np.array([180, upper[1], upper[2]]))
-            mask = cv2.bitwise_or(mask, mask2)
+        # Segundo rango opcional (para rojo que cruza 0/180)
+        if lower2 is not None and upper2 is not None:
+            mask2 = cv2.inRange(hsv, lower2, upper2)
+            mask  = cv2.bitwise_or(mask, mask2)
 
         kernel = np.ones((5, 5), np.uint8)
         mask   = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  kernel)
         mask   = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(
+            mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
         valid = [c for c in contours if cv2.contourArea(c) >= self.min_area]
 
         if not valid:
             return False, 0.0, 0.0, 0.0, mask
 
-        target    = max(valid, key=cv2.contourArea)
-        area      = cv2.contourArea(target)
-        M         = cv2.moments(target)
+        target = max(valid, key=cv2.contourArea)
+        area   = cv2.contourArea(target)
 
+        M = cv2.moments(target)
         if M['m00'] == 0:
             return False, 0.0, 0.0, 0.0, mask
 
@@ -115,6 +152,10 @@ class CameraNode(Node):
         area_norm = area / (h * w)
 
         return True, x_norm, y_norm, area_norm, mask
+
+    # ─────────────────────────────────────────
+    # Loop de captura
+    # ─────────────────────────────────────────
 
     def capture_loop(self):
         while not self._stop:
@@ -130,51 +171,88 @@ class CameraNode(Node):
             blurred = cv2.GaussianBlur(frame, (7, 7), 0)
             hsv     = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
 
-            # ── Verde ──
-            v_det, vx, vy, va, v_mask = self._detectar(hsv, self.lower_verde, self.upper_verde)
+            # ── Detectar verde ──
+            v_det, vx, vy, va, v_mask = self._detectar(
+                hsv, self.lower_verde, self.upper_verde)
 
-            if v_det:
-                self.frames_sin_verde = 0
+            # ── Detectar café ──
+            c_det, cx, cy, ca, c_mask = self._detectar(
+                hsv, self.lower_cafe, self.upper_cafe)
+
+            # ── Publicar el sargaso más grande como target principal ──
+            # Prioridad: si hay verde Y café, publicar el de mayor área
+            target_det = False
+            tx, ty, ta = 0.0, 0.0, 0.0
+            tipo = ''
+
+            if v_det and c_det:
+                if va >= ca:
+                    tx, ty, ta, tipo = vx, vy, va, 'VERDE'
+                else:
+                    tx, ty, ta, tipo = cx, cy, ca, 'CAFE'
+                target_det = True
+            elif v_det:
+                tx, ty, ta, tipo = vx, vy, va, 'VERDE'
+                target_det = True
+            elif c_det:
+                tx, ty, ta, tipo = cx, cy, ca, 'CAFE'
+                target_det = True
+
+            if target_det:
+                self.frames_sin_target = 0
                 msg = Bool(); msg.data = True
-                self.verde_detected_pub.publish(msg)
+                self.target_detected_pub.publish(msg)
                 pos = Float32MultiArray()
-                pos.data = [float(vx), float(vy), float(va)]
-                self.verde_position_pub.publish(pos)
+                pos.data = [float(tx), float(ty), float(ta)]
+                self.target_position_pub.publish(pos)
                 self.get_logger().info(
-                    f"VERDE x={vx:+.2f} "
-                    f"({'izq' if vx<-0.1 else 'der' if vx>0.1 else 'centro'}) "
-                    f"area={va:.3f}")
+                    f"{tipo} x={tx:+.2f} "
+                    f"({'izq' if tx<-0.1 else 'der' if tx>0.1 else 'centro'}) "
+                    f"area={ta:.3f}")
             else:
-                self.frames_sin_verde += 1
-                if self.frames_sin_verde >= self.FRAMES_PERDIDA:
+                self.frames_sin_target += 1
+                if self.frames_sin_target >= self.FRAMES_PERDIDA:
                     msg = Bool(); msg.data = False
-                    self.verde_detected_pub.publish(msg)
+                    self.target_detected_pub.publish(msg)
 
-            # ── Rojo ──
-            r_det, rx, ry, ra, r_mask = self._detectar(hsv, self.lower_rojo, self.upper_rojo)
+            # ── Detectar boyas (rojo/naranja, doble rango) ──
+            b_det, bx, by, ba, b_mask = self._detectar(
+                hsv,
+                self.lower_boya, self.upper_boya,
+                self.lower_boya2, self.upper_boya2)
 
-            if r_det:
-                self.frames_sin_rojo = 0
+            if b_det:
+                self.frames_sin_boya = 0
                 msg = Bool(); msg.data = True
-                self.rojo_detected_pub.publish(msg)
+                self.boya_detected_pub.publish(msg)
                 pos = Float32MultiArray()
-                pos.data = [float(rx), float(ry), float(ra)]
-                self.rojo_position_pub.publish(pos)
-                self.get_logger().warn(f"ROJO (peligro) x={rx:+.2f} area={ra:.3f}")
+                pos.data = [float(bx), float(by), float(ba)]
+                self.boya_position_pub.publish(pos)
+                self.get_logger().warn(
+                    f"BOYA x={bx:+.2f} area={ba:.3f} — limite zona")
             else:
-                self.frames_sin_rojo += 1
-                if self.frames_sin_rojo >= self.FRAMES_PERDIDA:
+                self.frames_sin_boya += 1
+                if self.frames_sin_boya >= self.FRAMES_PERDIDA:
                     msg = Bool(); msg.data = False
-                    self.rojo_detected_pub.publish(msg)
+                    self.boya_detected_pub.publish(msg)
 
             # ── Imagen debug ──
             if self.pub_image:
                 try:
                     annotated = frame.copy()
-                    for c in cv2.findContours(v_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
+                    for c in cv2.findContours(
+                            v_mask, cv2.RETR_EXTERNAL,
+                            cv2.CHAIN_APPROX_SIMPLE)[0]:
                         if cv2.contourArea(c) >= self.min_area:
                             cv2.drawContours(annotated, [c], -1, (0, 255, 0), 2)
-                    for c in cv2.findContours(r_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]:
+                    for c in cv2.findContours(
+                            c_mask, cv2.RETR_EXTERNAL,
+                            cv2.CHAIN_APPROX_SIMPLE)[0]:
+                        if cv2.contourArea(c) >= self.min_area:
+                            cv2.drawContours(annotated, [c], -1, (0, 165, 255), 2)
+                    for c in cv2.findContours(
+                            b_mask, cv2.RETR_EXTERNAL,
+                            cv2.CHAIN_APPROX_SIMPLE)[0]:
                         if cv2.contourArea(c) >= self.min_area:
                             cv2.drawContours(annotated, [c], -1, (0, 0, 255), 2)
                     img_msg = self.bridge.cv2_to_imgmsg(annotated, 'bgr8')

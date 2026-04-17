@@ -46,9 +46,8 @@ class MotorNode(Node):
         self.get_logger().info("MotorNode listo (un brushless)")
 
     def cb_speed(self, msg: Float32):
-        self.speed = max(-self.max_speed,
-                         min(self.max_speed, msg.data))
-        self.last_cmd_time = time.time()
+     self.speed = max(0.0,  # sin reversa
+                     min(self.max_speed, msg.data))
 
     def publish_speeds(self):
         """Publica la velocidad del único motor."""
